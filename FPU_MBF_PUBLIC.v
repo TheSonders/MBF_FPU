@@ -230,7 +230,7 @@ module FPU_MBF(
 								if (`Dividend_Sign==`Divider_Sign)begin
 									ResultSign<=Carry;
 									STM<=STM_Normal;
-									if (Carry) Result=~Result+1;
+									if (Carry) Result<=~Result+1;
 								end
 								else begin
 									ResultSign<=`Dividend_Sign;
@@ -258,7 +258,7 @@ module FPU_MBF(
 								else begin
 									ResultSign<=Carry;
 									STM<=STM_Normal;
-									if (Carry) Result=~Result+1;
+									if (Carry) Result<=~Result+1;
 								end
 							end
 						end
