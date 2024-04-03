@@ -73,19 +73,17 @@ module FPU_MBF(
 	`define Dividend_Exponent		register[10]
 	`define Dividend_Sign 			(register[9][7])
 	`define Dividend_Mantissa 		{register[9][6:0],register[8],register[7],register[6]}
-	`define Dividend					{register[9],register[8],register[7],register[6]}
 	
 	`define Divider_Exponent		register[5]
 	`define Divider_Sign 			(register[4][7])
 	`define Divider_Mantissa 		{register[4][6:0],register[3],register[2],register[1]}
-	`define Divider					{register[4],register[3],register[2],register[1]}
+	`define Divider_Registers		{register[4],register[3],register[2],register[1]}
 	
 	`define Opcode						register[0]
 	
 	`define INC(re)					re<=re+1
 	`define DEC(re)					re<=re-1
-	
-	
+			
 	reg [7:0]register[0:10];
 	
 	assign BUSY_n=(~RD_n & ~CS_n)?~Busy:1;
@@ -105,10 +103,10 @@ module FPU_MBF(
 	reg Busy=0;
 	reg Add_Sub=0;
 	
-	reg [3:0]STM=STM_Start;
+	reg [2:0]STM=STM_Start;
 	reg [4:0]Shf_Counter=0;
-	reg Dividend_Sign=0;
-	reg Divider_Sign=0;
+	reg unsigned[31:0]Dividend=0;
+	reg unsigned[31:0]Divider=0;
 	reg unsigned[63:0]Accumulator=0;
 	reg unsigned[63:0]Multiplicand=0;
 	reg [31:0]Result=0;
@@ -126,7 +124,6 @@ module FPU_MBF(
 			end
 			register[0]<=DATA_in;
 			STM<=STM_Start;
-			Busy<=1;
 		end
 		
 		else if (`BusRead && ~Busy)begin
@@ -140,30 +137,44 @@ module FPU_MBF(
 			case (STM)
 				STM_Start:begin
 					STM<=STM_Unpack;
+					Busy<=1;
 				end
 				STM_Unpack:begin
-					if (`Opcode==fadd || `Opcode ==fsub)STM<=STM_DeNorm;
-					else STM<=STM_Prepare;
-					`Dividend<={1'b1,`Dividend_Mantissa};
-					`Divider<={1'b1,`Divider_Mantissa};
-					Dividend_Sign=`Dividend_Sign;
-					Divider_Sign=`Divider_Sign;
+					Dividend<={1'b1,`Dividend_Mantissa};
+					Divider<={1'b1,`Divider_Mantissa};
 					Shf_Counter<=31;
 					Accumulator<=0;
 					Multiplicand<={1'b1,`Dividend_Mantissa};
 					Result<=0;
 					Carry<=0;
-					if (`Opcode==fmul)Exponent<=`Dividend_Exponent+`Divider_Exponent;
-					else if (`Opcode==fdiv)Exponent<=(`Dividend_Exponent-`Divider_Exponent)+9'h81;
+					case (`Opcode)
+						fsub:begin
+							STM<=STM_DeNorm;
+						end
+						fadd:begin
+							STM<=STM_DeNorm;
+						end
+						fmul:begin
+							STM<=STM_Prepare;
+							Exponent<=`Dividend_Exponent+`Divider_Exponent;
+						end
+						fdiv:begin
+							STM<=STM_Prepare;
+							Exponent<=(`Dividend_Exponent-`Divider_Exponent)+9'h81;
+						end
+						default:begin
+							STM<=STM_Idle;
+						end
+					endcase
 				end
 				STM_DeNorm:begin
 					if (`Dividend_Exponent<`Divider_Exponent)begin
 						`INC(`Dividend_Exponent);
-						`Dividend<=`Dividend>>1;
+						Dividend<=Dividend>>1;
 					end
 					else if (`Divider_Exponent<`Dividend_Exponent)begin
 						`INC(`Divider_Exponent);
-						`Divider<=`Divider>>1;
+						Divider<=Divider>>1;
 					end
 					else begin
 						STM<=STM_Prepare;
@@ -172,20 +183,20 @@ module FPU_MBF(
 				STM_Prepare:begin
 					case (`Opcode)
 						fsub:begin
-							if (Dividend_Sign==Divider_Sign)begin
-								{Carry,Result}<=`Dividend-`Divider;
+							if (`Dividend_Sign==`Divider_Sign)begin
+								{Carry,Result}<=Dividend-Divider;
 							end
 							else begin
-								{Carry,Result}<=`Dividend+`Divider;
+								{Carry,Result}<=Dividend+Divider;
 							end
 							STM<=STM_Sample;
 						end
 						fadd:begin
-							if (Dividend_Sign==Divider_Sign)begin
-								{Carry,Result}<=`Dividend+`Divider;
+							if (`Dividend_Sign==`Divider_Sign)begin
+								{Carry,Result}<=Dividend+Divider;
 							end
 							else begin
-								{Carry,Result}<=`Dividend-`Divider;
+								{Carry,Result}<=Dividend-Divider;
 							end
 							STM<=STM_Sample;
 						end
@@ -195,12 +206,12 @@ module FPU_MBF(
 							end
 							else begin
 								`Divider_Exponent<=(Exponent-'h80);
-								if (`Divider & 1 ==1)begin
+								if (Divider[0]==1)begin
 									Accumulator<=Accumulator+Multiplicand;
 								end
-								`Divider<=`Divider>>1;
+								Divider<=Divider>>1;
 								`DEC(Shf_Counter);
-								Multiplicand<=Multiplicand<<1;
+								Multiplicand<={Multiplicand[62:0],1'b0};
 								if (Shf_Counter==0)STM<=STM_Sample;
 							end
 						end
@@ -210,12 +221,12 @@ module FPU_MBF(
 							end
 							else begin
 								`Divider_Exponent<=Exponent;
-								if (`Divider>Multiplicand)begin
-									Multiplicand<={Multiplicand[62:0],1'b0};
+								if (Divider>Multiplicand)begin
+									Multiplicand<=Multiplicand<<1;
 									Result<={Result[30:0],1'b0};
 								end
 								else begin
-									Multiplicand<={Multiplicand-`Divider,1'b0};
+									Multiplicand<={Multiplicand-Divider,1'b0};
 									Result<={Result[30:0],1'b1};
 								end
 								`DEC(Shf_Counter);
@@ -231,13 +242,13 @@ module FPU_MBF(
 								RESULT_ZERO;
 							end
 							else begin
-								if (Dividend_Sign==Divider_Sign)begin
+								if (`Dividend_Sign==`Divider_Sign)begin
 									ResultSign<=Carry;
 									STM<=STM_Normal;
 									if (Carry) Result<=~Result+1;
 								end
 								else begin
-									ResultSign<=Dividend_Sign;
+									ResultSign<=`Dividend_Sign;
 									if (Carry==1)begin
 										`INC(`Divider_Exponent);
 										STM<=STM_Restore;
@@ -251,8 +262,8 @@ module FPU_MBF(
 								RESULT_ZERO;
 							end
 							else begin
-								if (Dividend_Sign==Divider_Sign)begin
-									ResultSign<=Dividend_Sign;
+								if (`Dividend_Sign==`Divider_Sign)begin
+									ResultSign<=`Dividend_Sign;
 									if (Carry==1)begin
 										`INC(`Divider_Exponent);
 										STM<=STM_Restore;
@@ -271,7 +282,7 @@ module FPU_MBF(
 								RESULT_ZERO;
 							end
 							else begin
-								if (Dividend_Sign==Divider_Sign)ResultSign<=0;
+								if (`Dividend_Sign==`Divider_Sign)ResultSign<=0;
 								else ResultSign<=1;
 								if (Accumulator[63]==1)begin
 									Result<=Accumulator[63:32];
@@ -284,7 +295,7 @@ module FPU_MBF(
 							end
 						end
 						fdiv:begin
-							if (Dividend_Sign==Divider_Sign)ResultSign<=0;
+							if (`Dividend_Sign==`Divider_Sign)ResultSign<=0;
 							else ResultSign<=1;
 							STM<=STM_Normal;
 						end
@@ -300,7 +311,7 @@ module FPU_MBF(
 					end
 				end
 				STM_Restore:begin
-					`Divider<={ResultSign,Result[30:0]};
+					`Divider_Registers<={ResultSign,Result[30:0]};
 					STM<=STM_Idle;
 				end
 				STM_Idle:begin
